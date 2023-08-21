@@ -1,0 +1,502 @@
+---
+title: "No more low cost"
+subject: "Statistical Learning-Supervised"
+output: html_document
+author: "Pignatelli Nicolò"
+date: "2023-07-11"
+---
+
+The following analysis is based on data from https://www.kaggle.com/datasets/shubhambathwal/flight-price-prediction. This data set contains 300153 observations with 12 features and it comes from a website, "Ease my Trip".
+Our goal is to build the best model in order to be able to predict the price and also to understand which are the most important features.
+
+1.DATA PREPARATION AND DESCRIPTIVE ANALYSIS
+
+First of all, let's upload the packages that are needed.
+
+```{r}
+library(tidyverse)
+library(ggcorrplot)
+library(caret)
+library(ggpubr)
+library(car)
+library(MASS)
+library(glmnet)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+
+Let's import the data set.
+
+```{r}
+raw_db=read.csv("C:/Users/Pigna/OneDrive/Desktop/ML&SL/Pignatelli_Nicolò_SL_assignment/airprice.csv")
+```
+
+Let's see the data set.
+
+```{r}
+glimpse(raw_db)
+```
+
+Let's understand how many unique values every feature contains.
+
+```{r}
+for (col in names(raw_db)) {
+  variable <- raw_db[[col]]
+  print(paste(col,":",length(unique(variable))))
+}
+```
+
+First things first, let's drop the variables X and flight as they seem to have no meaning for the analysis.
+
+```{r}
+raw_db=raw_db %>%
+  dplyr::select(-c(X,flight))
+```
+
+Let's see again the data set.
+
+```{r}
+glimpse(raw_db)
+```
+
+A good thing to do now is to check for NAs.
+
+```{r}
+NAs_cells=sum(is.na(raw_db))/(nrow(raw_db)*ncol(raw_db))
+NAs_cells
+```
+
+We are lucky, there are no NAs so we do not have to think about how to treat them.
+Now we have to consider the types of our variables. Let's copy the data set to preserve the "original" one.
+
+```{r}
+complete_db=raw_db
+```
+
+And now conversion.
+
+```{r}
+complete_db$airline=as.factor(complete_db$airline)
+complete_db$source_city=as.factor(complete_db$source_city)
+complete_db$departure_time=as.factor(complete_db$departure_time)
+complete_db$arrival_time=as.factor(complete_db$arrival_time)
+complete_db$destination_city=as.factor(complete_db$destination_city)
+complete_db$class=as.factor(complete_db$class)
+complete_db$stops=as.factor(complete_db$stops)
+```
+
+Did it change?
+
+```{r}
+glimpse(complete_db)
+```
+
+Let's start studying independent variables.
+
+Categorical variables:
+1.airline
+
+```{r}
+counts_air=table(complete_db$airline)
+barplot(counts_air,col="blue",xlab="airline",ylab="frequency",main="airline barplot",width=0.5, ylim=c(0,150000))
+```
+
+2.source city and destination city
+
+```{r}
+counts_source=table(complete_db$source_city)
+barplot(counts_source,col="green",xlab="source city",ylab="frequency",main="source city barplot",width=0.5,ylim=c(0,150000))
+counts_destination=table(complete_db$destination_city)
+barplot(counts_destination,col="gold",xlab="destination city",ylab="frequency",main="destination city barplot", width=0.5,ylim=c(0,150000))
+```
+
+We have the same 6 cities as source and destination and also the frequency seems more or less the same. Just to be sure to don't make any confusion between the 2 columns, let's make them different (e.g: Mumbai becomes "from_Mumbai" and "to_Mumbai")
+
+```{r}
+complete_db$source_city=as.factor(paste0("from_",complete_db$source_city))
+complete_db$destination_city=as.factor(paste0("to_",complete_db$destination_city))
+```
+
+3.departure time and arrival time (the column not labelled is "Early Morning")
+
+```{r}
+counts_depart=table(complete_db$departure_time)
+barplot(counts_depart,col = "red",xlab="departure time",ylab="frequency",main="departure time barplot",width=0.5,  ylim=c(0,150000))
+counts_arrival=table(complete_db$arrival_time)
+barplot(counts_arrival,col="pink",xlab="arrival time",ylab="frequency",main="arrival time barplot",width=0.5,  ylim=c(0,150000))
+```
+
+Let's do for the times what we did for the city.
+
+```{r}
+complete_db$departure_time=as.factor(paste0("from_",complete_db$departure_time))
+complete_db$arrival_time=as.factor(paste0("to_",complete_db$arrival_time))
+```
+
+4.stops
+
+```{r}
+counts_stops=table(complete_db$stops)
+barplot(counts_stops,col="black",xlab="stops",ylab="frequency",main="stops barplot",width=0.5,ylim = c(0,300000))
+```
+
+5.class
+
+```{r}
+counts_class=table(complete_db$class)
+barplot(counts_class,col="violet",xlab="class",ylab="frequency",main="class barplot",width=0.5,ylim = c(0,250000))
+```
+
+Continuous variables:
+
+1.duration: how many hours the flight lasted
+
+```{r}
+boxplot(complete_db$duration)
+```
+
+2.days_left: how many day in advance the flight was booked
+
+```{r}
+boxplot(complete_db$days_left)
+```
+
+Our independent variables needed only some small adjustments, but there are no outliers or typos.
+
+Let's study now the dependent variable.
+Price:
+
+```{r}
+boxplot(complete_db$price)
+```
+
+Let's check for normality.
+
+```{r}
+qqnorm(complete_db$price)
+qqline(complete_db$price)
+ggdensity(complete_db$price)
+```
+
+Very particular distribution. Let's try anyway to log it.
+
+```{r}
+complete_db$log_price = log(complete_db$price)
+```
+
+Now let's see the distribution.
+
+```{r}
+qqnorm(complete_db$log_price)
+qqline(complete_db$log_price)
+```
+
+There is a clear division between low and high prices.
+
+```{r}
+ggdensity(complete_db$log_price,xlab='log_price',y='density')+
+  geom_vline(xintercept=10.15,col='black',lty='dashed')
+```
+
+Let's copy again the data set
+
+```{r}
+class_db=complete_db[,1:9]
+```
+
+Let's create a new column in the data set: high_price
+
+```{r}
+class_db$high_price=ifelse(complete_db$log_price>=10.15,1,0)
+```
+
+Now we will keep 2 data sets: one with price as continuous variable, one with price as binary variable.
+
+```{r}
+complete_db=complete_db %>%
+  dplyr::select(-c(price))
+```
+
+Let's see if this was worth the effort (a good amount of prices are "high"?).
+
+```{r}
+counts_price=table(class_db$high_price)
+barplot(counts_price,col="brown",xlab="price",ylab="frequency",main="price barplot",width=0.5,ylim = c(0,250000))
+```
+
+Let's study now correlation. First regression.
+
+```{r}
+model.matrix(~0+.,data=complete_db) %>% 
+  cor(use="pairwise.complete.obs") %>% 
+  ggcorrplot(show.diag=FALSE,type="lower",lab=TRUE,lab_size=2) 
+```
+
+Then classification
+
+```{r}
+model.matrix(~0+.,data=class_db) %>% 
+  cor(use="pairwise.complete.obs") %>% 
+  ggcorrplot(show.diag=FALSE, type="lower", lab=TRUE, lab_size=2)
+```
+
+There are no high correlation coefficients in absolute value between two independent variables.
+
+2.SUPERVISED LEARNING
+
+Let's start now with the models. Let's split into train and test set.
+
+```{r}
+set.seed(14)
+train_indices=createDataPartition(complete_db$log_price,times=1,p=0.7,list=FALSE)
+train=complete_db[train_indices,]
+test=complete_db[-train_indices,]
+class_train=class_db[train_indices,]
+class_test=class_db[-train_indices,]
+```
+
+We will start with the basic model: linear regression.
+
+```{r}
+lin_reg=lm(data=train,log_price~.)
+summary(lin_reg)
+```
+
+Let's see the performance of this model. We print also the RMSE of the training to have a benchmark.
+
+```{r}
+#RMSE train
+train_preds=predict(lin_reg,train)
+train_lin_reg_rmse=sqrt(mean((train$log_price-train_preds)^2))
+print(paste("Train RMSE Linear Regression:",train_lin_reg_rmse))
+#RMSE test
+lin_reg_preds=predict(lin_reg,test)
+lin_reg_rmse=sqrt(mean((test$log_price-lin_reg_preds)^2))
+print(paste("RMSE Linear Regression:",lin_reg_rmse))
+```
+
+No overfitting.
+As we have the linear regression, let's check for multicollinearity.
+
+```{r}
+sqrt(vif(lin_reg))
+```
+
+As expected, given also the good performance of linear regression, no multicollinearity.
+Before going on, let's do some diagnostics of the linear regression.
+
+```{r}
+res=lin_reg$residuals
+qqnorm(res)
+qqline(res)
+ggdensity(res)
+res_plot <- function(model, col_point = "black", col_line = "red") {
+  res <- model$residuals
+  fitted <- model$fitted.values
+  return(ggplot(mapping = aes(fitted, res)) +
+                  geom_point(col = col_point) +
+                  geom_smooth(col = col_line))
+}
+res_plot(lin_reg)
+```
+
+Are they normally distributed?
+
+```{r}
+ks.test(res,'pnorm')
+```
+
+No. The linear regression performed pretty well, but the residuals are not normally distributed.
+Let's do the robust regression.
+
+```{r}
+robust_lin_reg=rlm(data=train,log_price~.)
+summary(robust_lin_reg)
+```
+
+Now the performance:
+
+```{r}
+#RMSE test
+robust_lin_reg_preds=predict(robust_lin_reg,test)
+robust_lin_reg_rmse=sqrt(mean((test$log_price-robust_lin_reg_preds)^2))
+print(paste("RMSE Robust Linear Regression:",robust_lin_reg_rmse))
+```
+
+A bit higher than the non-robust one.
+
+Let's do classification now. Let's start with the logistic.
+
+```{r}
+logit=glm(high_price~.,data=class_train,family=binomial(link='logit'))
+summary(logit)
+```
+
+Let's evaluate the model.
+
+```{r}
+lr_prob=predict(logit,class_test,type='response')
+lr_pred=ifelse(lr_prob>0.5,1,0)
+lr_cm=confusionMatrix(as.factor(lr_pred),as.factor(class_test$high_price),positive='1')
+print(lr_cm)
+```
+
+Also the logistic performed very well.
+Let's now try to improve even more the performances by penalizing logistic. We will try lasso.
+
+```{r}
+y_train=class_train$high_price
+x_train=model.matrix( ~ .-1,class_train[,1:9])
+cv.lasso=cv.glmnet(x_train,y_train,alpha=1,family="binomial")
+plot(cv.lasso)
+print(cv.lasso$lambda.min)
+```
+
+Let's fit the model with the best lambda.
+
+```{r}
+lasso=glmnet(x_train,y_train,alpha=1,family="binomial",lambda=cv.lasso$lambda.min)
+coef(lasso)
+```
+
+Let's evaluate the performance of the lasso.
+
+```{r}
+x_test=model.matrix( ~ .-1,class_test[,1:9])
+lasso_prob=predict(lasso,x_test,type='response')
+lasso_pred=ifelse(lasso_prob>0.5,1,0)
+lasso_cm=confusionMatrix(as.factor(lasso_pred),as.factor(class_test$high_price),positive='1')
+print(lasso_cm)
+```
+
+We improved accuracy. We classified correctly overall 1 unit more out of 90044.
+
+To improve even more accuracy/rmse, we try to implement trees.
+Let's begin again with regression.
+
+```{r}
+large_tree=rpart(log_price~.,data=train,method="anova",model=TRUE)
+cp=which.min(large_tree$cptable[, "xerror"]) %>% large_tree$cptable[., "CP"]
+print(large_tree$cptable)
+tree=prune(large_tree,cp=cp)
+rpart.plot(tree)
+```
+
+Let's see the performance.
+
+```{r}
+#RMSE test
+tree_preds=predict(tree,test)
+tree_rmse=sqrt(mean((test$log_price-tree_preds)^2))
+print(paste("RMSE Tree:",tree_rmse))
+```
+
+Actually worse rmse than linear regression, but more interpretable.
+
+Now classification.
+
+```{r}
+large_class_tree=rpart(high_price~.,data=class_train,method="class",model=TRUE)
+cp=which.min(large_class_tree$cptable[, "xerror"]) %>% large_class_tree$cptable[., "CP"]
+print(large_class_tree$cptable)
+class_tree=prune(large_class_tree,cp=cp)
+rpart.plot(class_tree)
+```
+
+Let's see the performance of the model.
+
+```{r}
+tree_pred=predict(class_tree,class_test,type='class')
+tree_cm=confusionMatrix(as.factor(tree_pred),as.factor(class_test$high_price),positive='1')
+tree_cm
+```
+
+As for regression, less accurate, more interpretable.
+
+Let's try now with random forests. We will start again with regression.
+Let's build the random forest with the best mtry and find the best number of trees.
+First of all, we sample the training set again as we run rf with ~ 6000 observations (my laptop is what it is)
+
+```{r}
+set.seed(14)
+train_indices_rf=createDataPartition(complete_db$log_price,times=1,p=0.02,list=FALSE)
+train_rf=complete_db[train_indices_rf,]
+test_rf=complete_db[-train_indices_rf,]
+class_train_rf=class_db[train_indices_rf,]
+class_test_rf=class_db[-train_indices_rf,]
+```
+
+Now we look at the best mtry.
+
+```{r}
+set.seed(14)
+reg_mtry=tuneRF(x=train_rf[,-1],y=train_rf$log_price,ntreeTry=500)
+reg_mtry
+```
+
+Let's now find the best number of trees.
+
+```{r}
+set.seed(14)
+first_rf=randomForest(log_price~.,data=train_rf,mtry=9,ntree=500)
+plot(first_rf)
+abline(v=250,col='red')
+first_rf
+```
+
+Let's build the final model.
+
+```{r}
+set.seed(14)
+reg_rf=randomForest(log_price~.,data=train_rf,mtry=9,ntree=250,importance=TRUE)
+rf_preds=predict(reg_rf,test_rf)
+rf_rmse=sqrt(mean((test_rf$log_price-rf_preds)^2))
+print(paste("RMSE RF:",rf_rmse))
+```
+
+The random forest performs better than the other models. Let's plot how much each variable is important according to the model.
+
+```{r}
+reg_rf_impvars=varImpPlot(reg_rf) 
+```
+
+
+Let's try with classification. Again we look for mtry as the first hyperparameter.
+
+```{r}
+set.seed(14)
+class_train_rf$high_price=as.factor(class_train_rf$high_price)
+possible_mtrys=seq(1:9)
+for (v_mtry in possible_mtrys) {
+  class_rf=randomForest(high_price~.,data=class_train_rf,ntree=500,mtry=v_mtry)
+  print(class_rf)
+}
+```
+
+Now the number of trees.
+
+```{r}
+set.seed(14)
+class_rf_bestmtry=randomForest(high_price~.,data=class_train_rf,ntree=500,mtry=9)
+plot(class_rf_bestmtry)
+legend(x="topright",box.col="black",bg="white",box.lwd=2,title="err.rate",legend=c("OOB","0","1"),fill=c("black","red","green"))
+#abline(v=370,col='blue')
+```
+
+Let's evaluate the random forest for classification.
+
+```{r}
+class_rf=randomForest(high_price~.,data=class_train_rf,ntree=370,mtry=9,importance=TRUE)
+rf_predicts=predict(class_rf,class_test_rf,type='class')
+rf_cm=confusionMatrix(as.factor(rf_predicts),as.factor(class_test_rf$high_price),positive='1')
+rf_cm
+```
+
+Also for classification random forest is the best model. Let's plot again how much every variable is important according to this model.
+
+```{r}
+class_rf_impvars=varImpPlot(class_rf) 
+```
+
+Interestingly, they are not the same.

@@ -1,0 +1,176 @@
+---
+title: "No more low cost"
+subject: "Statistical Learning-Unsupervised"
+output: html_document
+author: "Pignatelli Nicolò"
+date: "2023-07-11"
+---
+
+The following analysis is based on data from https://www.kaggle.com/datasets/shubhambathwal/flight-price-prediction. This data set contains 300153 observations with 12 features and it comes from a website, "Ease my Trip".
+Our goal is to discover interesting insights about our data in a unsupervised way.
+N.B.: all of this was done after the supervised part, on the same data.
+
+1.DATA PREPARATION
+
+First of all, let's upload the packages that are needed.
+
+```{r}
+library(tidyverse)
+library(caret)
+library(tidyr)
+```
+
+Let's import the data set.
+
+```{r}
+original_db=read.csv("C:/Users/Pigna/OneDrive/Desktop/ML&SL/Pignatelli_Nicolò_SL_project/airprice.csv")
+```
+
+Let's drop the variables X and flight as they seem to have no meaning for the analysis.
+
+```{r}
+original_db=original_db %>%
+  dplyr::select(-c(X,flight))
+```
+
+Let's see again the data set.
+
+```{r}
+glimpse(original_db)
+```
+
+Now we have to consider the types of our variables. Let's copy the data set to preserve the "original" one.
+
+```{r}
+factor_db=original_db
+```
+
+And now conversion.
+
+```{r}
+factor_db$airline=as.factor(factor_db$airline)
+factor_db$source_city=as.factor(factor_db$source_city)
+factor_db$departure_time=as.factor(factor_db$departure_time)
+factor_db$arrival_time=as.factor(factor_db$arrival_time)
+factor_db$destination_city=as.factor(factor_db$destination_city)
+factor_db$class=as.factor(factor_db$class)
+factor_db$stops=as.factor(factor_db$stops)
+```
+
+Did it change?
+
+```{r}
+glimpse(factor_db)
+```
+
+3.UNSUPERVISED LEARNING
+
+Let's study a bit in an unsupervised way the data set. First of all, we subset the original data set as we need fewer observations to be able to compute the clustering.
+
+```{r}
+set.seed(14)
+cluster_indices=createDataPartition(factor_db$price,times=1,p=0.035,list=FALSE)
+cluster_db=factor_db[cluster_indices,]
+dur_price_db=cluster_db[,c(8,10)]
+```
+
+Let's see the new data set
+
+```{r}
+glimpse(cluster_db)
+```
+
+An interesting questions about data could be: is duration positively correlated with price? So, is true that longer the flight, higher the price?
+
+```{r}
+plot(cluster_db$duration,cluster_db$price,xlab="duration",ylab="price",col="blue")
+```
+
+Not really. A very strange plot.
+Let's scale before doing the clustering.
+
+```{r}
+scaled_dp_db=scale(dur_price_db)
+```
+
+Let's compute the distance matrix.
+
+```{r}
+dist_mat=dist(scaled_dp_db,method='euclidean')
+```
+
+Let's build the dendrogram.
+
+```{r}
+dendrogram=hclust(dist_mat,method='average')
+```
+
+Let's plot the dendrogram.
+
+```{r}
+plot(dendrogram)
+abline(h=2.2,col='blue')
+```
+
+Let's cut.
+
+```{r}
+fit=cutree(dendrogram,k=3)
+plot(dendrogram)
+rect.hclust(dendrogram,k=3,border=2:6)
+abline(h=2.2,col='black')
+```
+
+Let's now see the cluster.
+
+```{r}
+fit=as.data.frame(fit)
+durpr_df_cl=mutate(dur_price_db,cluster=fit)
+count(fit,cluster=fit)
+```
+
+Let's plot the variables according to the clusters.
+
+```{r}
+durpr_df_cl$cluster$fit=as.factor(durpr_df_cl$cluster$fit)
+ggplot(data=durpr_df_cl,
+       mapping=aes(x=duration,y=price))+
+      geom_point(mapping=aes(color=durpr_df_cl$cluster$fit))
+```
+
+We may expect that price and duration has a positve relationship: longer the flight, higher the price. We plot the variables and we can see that this is not what happens here. Thanks to the hierarchical clustering we see that we have 3 homogeneous different groups and we can clearly see that there is a subset of long flights with very low price.
+Let's see if we manage to add the source_city and destination_city to this analysis.
+
+```{r}
+cities=expand.grid(source_city=levels(cluster_db$source_city),destination_city=levels(cluster_db$destination_city))
+averages=aggregate(cluster_db[,c("duration", "price")],by=list(cluster_db$source_city, cluster_db$destination_city),FUN=mean)
+colnames(averages)=c("source_city","destination_city","average_duration","average_price")
+route_db=merge(cities,averages,by=c("source_city","destination_city"))
+route_db=unite(route_db,city,source_city,destination_city,sep="-")
+route_db
+```
+
+Let's scale again duration and price.
+
+```{r}
+scaled_route_db=route_db
+scaled_route_db[,c(2,3)]=scale(route_db[,c(2,3)])
+scaled_route_db
+```
+
+Let's compute the 3 clusters.
+
+```{r}
+grpRoutes=kmeans(scaled_route_db[,c(2,3)],centers=3,nstart=10)
+grpRoutes
+```
+
+Let's plot.
+
+```{r}
+plot(route_db$average_duration,route_db$average_price,type="n",xlab="duration",ylab="price",xlim=c(9,16))
+text(x=route_db$average_duration,y=route_db$average_price,labels=route_db$city,col=grpRoutes$cluster+1)
+```
+
+This time we see the positive correlation that we did not see before.
+Further analysis are needed.
